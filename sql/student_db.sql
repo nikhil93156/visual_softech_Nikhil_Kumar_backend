@@ -1,129 +1,106 @@
--- ====================================================================
+-- =============================================
 -- Database Creation Script for Student Management System
--- Target Database: StudentDB (Must be created in SSMS first)
--- ====================================================================
+-- Author: [Your Name]
+-- Description: Creates Database, Tables, Foreign Keys, and Seed Data
+-- =============================================
 
--- 1. Specify the target database
-USE StudentDB;
-GO
-
--- 2. Drop existing objects if they exist to allow clean re-execution
--- Dropping in reverse dependency order
-IF OBJECT_ID('Student_Detail', 'U') IS NOT NULL DROP TABLE Student_Detail;
-IF OBJECT_ID('Student_Mast', 'U') IS NOT NULL DROP TABLE Student_Mast;
-IF OBJECT_ID('State_Name', 'U') IS NOT NULL DROP TABLE State_Name;
-IF OBJECT_ID('Users', 'U') IS NOT NULL DROP TABLE Users;
-
-IF OBJECT_ID('InsertState', 'P') IS NOT NULL DROP PROCEDURE InsertState;
-IF OBJECT_ID('GetAllStudents', 'P') IS NOT NULL DROP PROCEDURE GetAllStudents;
-GO
-
--- ====================================================================
--- Table Creation
--- ====================================================================
-
--- 1. Table for System Users (Login)
-CREATE TABLE Users (
-    UserId INT PRIMARY KEY IDENTITY(1,1),
-    Username NVARCHAR(50) UNIQUE NOT NULL,
-    -- Default password for 'admin' will be 'password123' (hash not implemented in mock)
-    PasswordHash NVARCHAR(100) NOT NULL 
-);
-GO
-
--- 2. Table for State Names (Dynamic Dropdown source)
-CREATE TABLE State_Name (
-    StateId INT PRIMARY KEY IDENTITY(1,1),
-    StateName NVARCHAR(100) UNIQUE NOT NULL
-);
-GO
-
--- 3. Student Master Table (General Student Data)
-CREATE TABLE Student_Mast (
-    StudentId INT PRIMARY KEY IDENTITY(1,1),
-    Name NVARCHAR(100) NOT NULL,
-    Age INT NOT NULL, -- Required (Int)
-    DateOfBirth DATE NOT NULL, -- Required (Date)
-    Address NVARCHAR(255), -- Not Required
-    StateId INT NOT NULL, -- Required, Foreign Key (Int Dropdown)
-    PhoneNumber NVARCHAR(20) NOT NULL, -- Required (Text with regex validation)
-    PhotoPath NVARCHAR(255), 
-    PhotoData VARBINARY(MAX), -- Max 2KB compressed photo data storage (Optional)
-    CreatedAt DATETIME DEFAULT GETDATE(),
-    UpdatedAt DATETIME DEFAULT GETDATE(),
-    
-    FOREIGN KEY (StateId) REFERENCES State_Name(StateId)
-);
-GO
-
--- 4. Student Detail Table (Subjects - Table with dynamic rows)
-CREATE TABLE Student_Detail (
-    DetailId INT PRIMARY KEY IDENTITY(1,1),
-    StudentId INT NOT NULL,
-    SubjectName NVARCHAR(100) NOT NULL,
-    
-    -- Crucial: ON DELETE CASCADE ensures subject details are removed when the student master record is deleted.
-    FOREIGN KEY (StudentId) REFERENCES Student_Mast(StudentId) ON DELETE CASCADE
-);
-GO
-
--- ====================================================================
--- Initial Data Population
--- ====================================================================
-
--- Default Login User
-INSERT INTO Users (Username, PasswordHash) VALUES
-('admin', 'password123'); 
-
--- Initial States for the Dropdown
-INSERT INTO State_Name (StateName) VALUES
-('Maharashtra'),
-('Karnataka'),
-('Delhi'),
-('Tamil Nadu');
-GO
-
--- ====================================================================
--- Stored Procedures (APIs will call these for efficient DB operations)
--- ====================================================================
-
--- 1. SP to Insert a New State (for the 'Save State Name' modal)
-CREATE PROCEDURE InsertState (
-    @StateName NVARCHAR(100)
-)
-AS
+-- 1. Create Database (Check if it exists first to avoid errors)
+IF NOT EXISTS (SELECT * FROM sys.databases WHERE name = 'StudentDB')
 BEGIN
-    SET NOCOUNT ON;
-    IF NOT EXISTS (SELECT 1 FROM State_Name WHERE StateName = @StateName)
-    BEGIN
-        INSERT INTO State_Name (StateName) VALUES (@StateName);
-        SELECT SCOPE_IDENTITY() AS StateId; -- Return the new ID
-    END
-    ELSE
-    BEGIN
-        SELECT -1 AS StateId; -- Signal that the state already exists
-    END
+    CREATE DATABASE [StudentDB];
 END
 GO
 
--- 2. SP to Get All Students with State Name (for Index Page listing)
-CREATE PROCEDURE GetAllStudents
-AS
+USE [StudentDB];
+GO
+
+-- =============================================
+-- 2. Create Tables
+-- =============================================
+
+-- Table: State_Mast
+-- Stores the dynamic list of States for the dropdown
+IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[State_Mast]') AND type in (N'U'))
 BEGIN
-    SET NOCOUNT ON;
-    SELECT
-        sm.StudentId,
-        sm.Name,
-        sm.Age,
-        sm.DateOfBirth,
-        sm.Address,
-        sm.PhoneNumber,
-        sn.StateName -- Joined State Name
-    FROM
-        Student_Mast sm
-    JOIN
-        State_Name sn ON sm.StateId = sn.StateId
-    ORDER BY
-        sm.StudentId DESC;
+    CREATE TABLE [dbo].[State_Mast](
+        [StateId] [int] IDENTITY(1,1) NOT NULL,
+        [StateName] [nvarchar](100) NOT NULL UNIQUE,
+        PRIMARY KEY CLUSTERED ([StateId] ASC)
+    );
 END
+GO
+
+-- Table: Student_Mast
+-- Stores the main student details and the photo
+IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[Student_Mast]') AND type in (N'U'))
+BEGIN
+    CREATE TABLE [dbo].[Student_Mast](
+        [StudentId] [int] IDENTITY(1,1) NOT NULL,
+        [Name] [nvarchar](100) NOT NULL,
+        [Age] [int] NOT NULL,
+        [DateOfBirth] [date] NOT NULL,
+        [Address] [nvarchar](max) NULL,
+        [PhoneNumber] [nvarchar](20) NOT NULL,
+        [StateId] [int] NOT NULL,
+        [PhotoData] [varbinary](max) NULL, -- Stores the image as binary data
+        PRIMARY KEY CLUSTERED ([StudentId] ASC)
+    );
+END
+GO
+
+-- Table: Student_Detail
+-- Stores the subjects. One student can have multiple subjects.
+IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[Student_Detail]') AND type in (N'U'))
+BEGIN
+    CREATE TABLE [dbo].[Student_Detail](
+        [DetailId] [int] IDENTITY(1,1) NOT NULL,
+        [StudentId] [int] NOT NULL,
+        [SubjectName] [nvarchar](100) NOT NULL,
+        PRIMARY KEY CLUSTERED ([DetailId] ASC)
+    );
+END
+GO
+
+-- =============================================
+-- 3. Create Foreign Keys (Relationships)
+-- =============================================
+
+-- Link Student to State
+-- If a State is deleted, we strictly prevent it if students are using it (No Action/Default)
+IF NOT EXISTS (SELECT * FROM sys.foreign_keys WHERE object_id = OBJECT_ID(N'[dbo].[FK_Student_State]') AND parent_object_id = OBJECT_ID(N'[dbo].[Student_Mast]'))
+BEGIN
+    ALTER TABLE [dbo].[Student_Mast] WITH CHECK ADD CONSTRAINT [FK_Student_State] FOREIGN KEY([StateId])
+    REFERENCES [dbo].[State_Mast] ([StateId]);
+    
+    ALTER TABLE [dbo].[Student_Mast] CHECK CONSTRAINT [FK_Student_State];
+END
+GO
+
+-- Link Subjects to Student
+-- ON DELETE CASCADE: If a Student is deleted, their subjects are automatically deleted.
+IF NOT EXISTS (SELECT * FROM sys.foreign_keys WHERE object_id = OBJECT_ID(N'[dbo].[FK_Subject_Student]') AND parent_object_id = OBJECT_ID(N'[dbo].[Student_Detail]'))
+BEGIN
+    ALTER TABLE [dbo].[Student_Detail] WITH CHECK ADD CONSTRAINT [FK_Subject_Student] FOREIGN KEY([StudentId])
+    REFERENCES [dbo].[Student_Mast] ([StudentId])
+    ON DELETE CASCADE;
+    
+    ALTER TABLE [dbo].[Student_Detail] CHECK CONSTRAINT [FK_Subject_Student];
+END
+GO
+
+-- =============================================
+-- 4. Seed Data (Default Values)
+-- =============================================
+
+-- Insert default States so the dropdown is not empty on first run
+INSERT INTO [dbo].[State_Mast] ([StateName])
+SELECT 'Delhi' WHERE NOT EXISTS (SELECT 1 FROM State_Mast WHERE StateName = 'Delhi')
+UNION ALL
+SELECT 'Maharashtra' WHERE NOT EXISTS (SELECT 1 FROM State_Mast WHERE StateName = 'Maharashtra')
+UNION ALL
+SELECT 'Karnataka' WHERE NOT EXISTS (SELECT 1 FROM State_Mast WHERE StateName = 'Karnataka')
+UNION ALL
+SELECT 'Tamil Nadu' WHERE NOT EXISTS (SELECT 1 FROM State_Mast WHERE StateName = 'Tamil Nadu')
+UNION ALL
+SELECT 'Uttar Pradesh' WHERE NOT EXISTS (SELECT 1 FROM State_Mast WHERE StateName = 'Uttar Pradesh');
 GO
